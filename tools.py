@@ -1,0 +1,641 @@
+from langchain.tools import tool
+from dotenv import load_dotenv
+import json
+import os
+import random
+import re
+import time
+from pathlib import Path
+
+import requests
+
+
+load_dotenv()
+GROQ_API_URL = "https://api.groq.com/openai/v1"
+MAX_BATTLE_MODELS = 4
+NON_CHAT_MODEL_KEYWORDS = (
+    "whisper",
+    "guard",
+    "safeguard",
+    "prompt-guard",
+    "tts",
+    "orpheus",
+)
+
+
+# ============================================
+# 파일 시스템 도구
+# ============================================
+
+@tool(parse_docstring=True)
+def read_file(file_path: str) -> str:
+    """파일의 내용을 읽어서 반환합니다.
+
+    Args:
+        file_path: 읽을 파일의 경로
+
+    Returns:
+        파일 내용 또는 오류 메시지
+    """
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        return f"파일: {file_path}\n\n{content}"
+    except Exception as e:
+        return f"오류: {str(e)}"
+
+
+@tool(parse_docstring=True)
+def write_file(file_path: str, content: str) -> str:
+    """파일에 내용을 작성합니다. 파일이 없으면 생성하고, 있으면 덮어씁니다.
+
+    Args:
+        file_path: 작성할 파일의 경로
+        content: 파일에 쓸 내용
+
+    Returns:
+        성공 메시지 또는 오류 메시지
+    """
+    try:
+        # 디렉터리가 없으면 생성
+        os.makedirs(os.path.dirname(file_path) if os.path.dirname(file_path) else ".", exist_ok=True)
+
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        return f"성공: 파일이 작성되었습니다: {file_path}"
+    except Exception as e:
+        return f"오류: {str(e)}"
+
+
+@tool(parse_docstring=True)
+def edit_file(file_path: str, old_string: str, new_string: str) -> str:
+    """파일에서 특정 문자열을 찾아 새로운 문자열로 교체합니다.
+
+    Args:
+        file_path: 수정할 파일의 경로
+        old_string: 찾을 문자열
+        new_string: 교체할 문자열
+
+    Returns:
+        성공 메시지 또는 오류 메시지
+    """
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        if old_string not in content:
+            return f"오류: 파일에서 지정된 문자열을 찾을 수 없습니다: {file_path}"
+
+        new_content = content.replace(old_string, new_string)
+
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+
+        return f"성공: 파일이 수정되었습니다: {file_path}"
+    except Exception as e:
+        return f"오류: {str(e)}"
+
+
+@tool(parse_docstring=True)
+def delete_file(file_path: str) -> str:
+    """파일을 삭제합니다.
+
+    Args:
+        file_path: 삭제할 파일의 경로
+
+    Returns:
+        성공 메시지 또는 오류 메시지
+    """
+    try:
+        if os.path.isfile(file_path):
+            os.remove(file_path)
+            return f"성공: 파일이 삭제되었습니다: {file_path}"
+        else:
+            return f"오류: 파일을 찾을 수 없습니다: {file_path}"
+    except Exception as e:
+        return f"오류: {str(e)}"
+
+
+@tool(parse_docstring=True)
+def create_directory(dir_path: str) -> str:
+    """새로운 디렉터리를 생성합니다.
+
+    Args:
+        dir_path: 생성할 디렉터리의 경로
+
+    Returns:
+        성공 메시지 또는 오류 메시지
+    """
+    try:
+        os.makedirs(dir_path, exist_ok=True)
+        return f"성공: 디렉터리가 생성되었습니다: {dir_path}"
+    except Exception as e:
+        return f"오류: {str(e)}"
+
+
+@tool(parse_docstring=True)
+def list_directory(dir_path: str = ".") -> str:
+    """디렉터리의 파일과 폴더 목록을 반환합니다.
+
+    Args:
+        dir_path: 조회할 디렉터리 경로 (기본값: 현재 디렉터리)
+
+    Returns:
+        파일 및 폴더 목록 또는 오류 메시지
+    """
+    try:
+        if not os.path.exists(dir_path):
+            return f"오류: 디렉터리를 찾을 수 없습니다: {dir_path}"
+
+        items = os.listdir(dir_path)
+
+        if not items:
+            return f"디렉터리가 비어있습니다: {dir_path}"
+
+        # 파일과 폴더 분류
+        folders = []
+        files = []
+
+        for item in sorted(items):
+            item_path = os.path.join(dir_path, item)
+            if os.path.isdir(item_path):
+                folders.append(f"📁 {item}/")
+            else:
+                files.append(f"📄 {item}")
+
+        result = [f"디렉터리: {dir_path}\n"]
+
+        if folders:
+            result.append("폴더:")
+            result.extend(folders)
+            result.append("")
+
+        if files:
+            result.append("파일:")
+            result.extend(files)
+
+        return "\n".join(result)
+    except Exception as e:
+        return f"오류: {str(e)}"
+
+
+# ============================================
+# 문서 읽기 도구
+# ============================================
+
+@tool(parse_docstring=True)
+def read_csv(file_path: str, max_rows: int = 50) -> str:
+    """CSV 파일의 데이터를 읽습니다.
+
+    Args:
+        file_path: CSV 파일 경로
+        max_rows: 읽을 최대 행 수 (기본값: 50)
+
+    Returns:
+        파일 내용 또는 오류 메시지
+    """
+    try:
+        if not os.path.exists(file_path):
+            return f"오류: 파일을 찾을 수 없습니다: {file_path}"
+
+        with open(file_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+
+        total_lines = len(lines)
+        displayed_lines = min(total_lines, max_rows)
+        content = "".join(lines[:displayed_lines])
+
+        result = f"파일: {file_path}\n타입: CSV\n총 {total_lines}줄 (표시: {displayed_lines}줄)\n\n{content}"
+
+        if total_lines > max_rows:
+            result += f"\n\n... ({total_lines - max_rows}줄 생략)"
+
+        return result
+    except Exception as e:
+        return f"오류: {str(e)}"
+
+
+# ============================================
+# 문서 검색 도구
+# ============================================
+
+@tool(parse_docstring=True)
+def search_workspace(query: str) -> str:
+    """workspace에서 파일명에 특정 키워드가 포함된 파일을 검색합니다.
+
+    Args:
+        query: 검색할 키워드
+
+    Returns:
+        검색 결과 목록
+    """
+    try:
+        cwd = os.getcwd()
+        results = []
+
+        # 지원하는 확장자
+        extensions = [".md", ".txt", ".csv"]
+
+        # workspace 검색
+        for root, dirs, files in os.walk(cwd):
+            # 제외할 디렉터리
+            dirs[:] = [d for d in dirs if not d.startswith('.')
+                       and d not in ['__pycache__', 'node_modules', 'venv', '.cache']]
+
+            level = root.replace(cwd, '').count(os.sep)
+            if level > 3:
+                continue
+
+            for file in files:
+                if file.startswith('.'):
+                    continue
+
+                file_ext = os.path.splitext(file)[1].lower()
+
+                # 파일명에 query가 포함되어 있는지 확인
+                if file_ext in extensions and query.lower() in file.lower():
+                    file_path = os.path.join(root, file)
+                    rel_path = os.path.relpath(file_path, cwd)
+                    results.append(f"  • {rel_path}")
+
+        if not results:
+            return f"검색 결과 없음: '{query}'에 해당하는 파일을 찾을 수 없습니다."
+
+        output = [f"🔍 검색어: {query}", f"📊 총 {len(results)}개 파일 발견\n"]
+        output.extend(results)
+
+        return "\n".join(output)
+    except Exception as e:
+        return f"오류: {str(e)}"
+
+
+# ============================================
+# Open LLM 비교 보고서 도구
+# ============================================
+
+def _groq_headers() -> dict:
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        raise ValueError(".env에서 GROQ_API_KEY를 찾을 수 없습니다.")
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+
+def _safe_report_filename(report_filename: str) -> str:
+    filename = os.path.basename(report_filename.strip() or "open_llm_battle_report.md")
+    if not filename.lower().endswith(".md"):
+        filename += ".md"
+    return filename
+
+
+def _clean_korean_answer(answer: str) -> str:
+    """노출된 내부 추론을 제거하고 한국어 최종 답변만 허용합니다."""
+    cleaned = re.sub(
+        r"<think>.*?(?:</think>|$)",
+        "",
+        answer,
+        flags=re.DOTALL | re.IGNORECASE,
+    ).strip()
+    hangul_count = len(re.findall(r"[가-힣]", cleaned))
+    latin_count = len(re.findall(r"[A-Za-z]", cleaned))
+    language_char_count = hangul_count + latin_count
+    korean_ratio = hangul_count / language_char_count if language_char_count else 0
+    return cleaned if hangul_count > 0 and korean_ratio >= 0.25 else ""
+
+
+def _model_family(model_id: str, owned_by: str = "") -> str:
+    """Groq 모델 ID를 제공 기업/모델 계열 이름으로 정규화합니다."""
+    normalized = model_id.lower()
+    family_rules = (
+        (("openai/", "gpt-"), "OpenAI"),
+        (("qwen/",), "Alibaba Qwen"),
+        (("meta-llama/", "llama-"), "Meta Llama"),
+        (("moonshotai/", "kimi"), "Moonshot Kimi"),
+        (("google/", "gemma"), "Google Gemma"),
+        (("minimax/", "minimax"), "MiniMax"),
+        (("mistral",), "Mistral AI"),
+        (("groq/",), "Groq"),
+    )
+    for prefixes, family in family_rules:
+        if any(normalized.startswith(prefix) for prefix in prefixes):
+            return family
+    return owned_by.strip() or model_id.split("/", 1)[0]
+
+
+def _get_supported_chat_models() -> list[dict]:
+    """현재 계정에 노출된 Groq 채팅 모델을 실시간으로 조회합니다."""
+    response = requests.get(
+        f"{GROQ_API_URL}/models",
+        headers=_groq_headers(),
+        timeout=30,
+    )
+    response.raise_for_status()
+
+    supported = []
+    for model in response.json().get("data", []):
+        model_id = str(model.get("id") or "").strip()
+        if not model_id or any(word in model_id.lower() for word in NON_CHAT_MODEL_KEYWORDS):
+            continue
+        supported.append({
+            "model_id": model_id,
+            "family": _model_family(model_id, str(model.get("owned_by") or "")),
+        })
+    return supported
+
+
+def _parse_report_request(request: str) -> tuple[str, str]:
+    """에이전트가 전달한 단일 문자열에서 질문과 선택 조건을 분리합니다."""
+    question_match = re.search(
+        r"(?:^|\n)\s*질문\s*:\s*(.+?)(?=\n\s*선택\s*:|$)",
+        request,
+        flags=re.DOTALL,
+    )
+    selection_match = re.search(r"(?:^|\n)\s*선택\s*:\s*(.+)$", request, flags=re.DOTALL)
+    if question_match:
+        return question_match.group(1).strip(), (selection_match.group(1).strip() if selection_match else "auto")
+
+    quoted = re.search(r'["“](.+?)["”]', request, flags=re.DOTALL)
+    question = quoted.group(1).strip() if quoted else request.strip()
+    explicit_ids = re.findall(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", request)
+    if explicit_ids:
+        return question, "models:" + ",".join(explicit_ids)
+
+    count_match = re.search(r"([2-4])\s*개", request)
+    return question, f"random:{count_match.group(1)}" if count_match else "auto"
+
+
+def _resolve_requested_models(selection: str, supported: list[dict]) -> tuple[list[dict], list[str]]:
+    """명시 모델을 해석하거나 서로 다른 기업을 우선해 무작위 선택합니다."""
+    normalized_selection = selection.strip()
+    if normalized_selection.lower().startswith("models:"):
+        names = [name.strip() for name in normalized_selection.split(":", 1)[1].split(",") if name.strip()]
+        if len(names) > MAX_BATTLE_MODELS:
+            raise ValueError(f"한 번에 비교할 모델은 최대 {MAX_BATTLE_MODELS}개입니다.")
+
+        aliases = {
+            "gpt": "OpenAI",
+            "openai": "OpenAI",
+            "qwen": "Alibaba Qwen",
+            "알리바바": "Alibaba Qwen",
+            "llama": "Meta Llama",
+            "라마": "Meta Llama",
+            "meta": "Meta Llama",
+            "kimi": "Moonshot Kimi",
+            "키미": "Moonshot Kimi",
+            "gemma": "Google Gemma",
+            "젬마": "Google Gemma",
+            "google": "Google Gemma",
+            "minimax": "MiniMax",
+            "groq": "Groq",
+        }
+        selected = []
+        missing = []
+        for name in names:
+            exact = next((model for model in supported if model["model_id"].lower() == name.lower()), None)
+            family_name = aliases.get(name.lower())
+            candidates = [model for model in supported if model["family"] == family_name] if family_name else []
+            match = exact or (random.choice(candidates) if candidates else None)
+            if match and match not in selected:
+                selected.append(match)
+            elif not match:
+                missing.append(name)
+        return selected, missing
+
+    count_match = re.search(r"random\s*:\s*([2-4])", normalized_selection, flags=re.IGNORECASE)
+    requested_count = int(count_match.group(1)) if count_match else min(MAX_BATTLE_MODELS, len(supported))
+
+    by_family: dict[str, list[dict]] = {}
+    for model in supported:
+        by_family.setdefault(model["family"], []).append(model)
+
+    families = list(by_family)
+    random.shuffle(families)
+    selected = [random.choice(by_family[family]) for family in families[:requested_count]]
+
+    # 현재 지원 기업 수보다 요청 개수가 많으면 남은 모델 중에서 채웁니다.
+    if len(selected) < requested_count:
+        remaining = [model for model in supported if model not in selected]
+        random.shuffle(remaining)
+        selected.extend(remaining[: requested_count - len(selected)])
+    return selected, []
+
+
+@tool(parse_docstring=True)
+def compare_open_llm_models_and_save_report(
+    question: str,
+    selection: str = "auto",
+    report_filename: str = "open_llm_battle_report.md",
+) -> str:
+    """Groq 모델을 실제 호출해 각 모델의 원문 답변까지 Markdown 보고서로 저장합니다.
+
+    Args:
+        question: 모든 모델에 동일하게 전달할 비교 질문입니다.
+        selection: random:2~4 또는 models:모델명,모델ID 형식의 선택 조건입니다.
+        report_filename: workspace/OpenLLM_Agent 폴더에 저장할 Markdown 파일명입니다.
+
+    Returns:
+        저장된 보고서 경로와 모델별 성공/실패 요약을 반환합니다.
+    """
+    try:
+        if not question.strip():
+            return "오류: 비교 질문이 비어 있습니다."
+
+        supported = _get_supported_chat_models()
+        if not supported:
+            return "오류: 현재 Groq 계정에서 사용할 수 있는 채팅 모델을 찾지 못했습니다."
+
+        selected, missing = _resolve_requested_models(selection, supported)
+        if not selected:
+            return "오류: 요청한 모델을 현재 Groq 계정에서 찾지 못했습니다: " + ", ".join(missing)
+
+        results = []
+        for target in selected:
+            model_id = target["model_id"]
+            started = time.perf_counter()
+            try:
+                request_body = {
+                    "model": model_id,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": (
+                                "최종 답변은 반드시 한국어로만 작성하세요. "
+                                "모델명, 코드, 고유명사를 제외한 설명은 모두 한국어로 작성하고 "
+                                "내부 추론 과정이나 <think> 태그는 출력하지 마세요."
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": f"다음 질문에 한국어로만 답변하세요.\n\n질문: {question}",
+                        },
+                    ],
+                    "max_completion_tokens": 512,
+                    "temperature": 0.2,
+                }
+                if model_id.lower().startswith("qwen/"):
+                    request_body["reasoning_effort"] = "none"
+                    request_body["reasoning_format"] = "hidden"
+
+                response = requests.post(
+                    f"{GROQ_API_URL}/chat/completions",
+                    headers=_groq_headers(),
+                    timeout=60,
+                    json=request_body,
+                )
+                elapsed = round(time.perf_counter() - started, 3)
+                if not response.ok:
+                    results.append({
+                        "model_id": model_id,
+                        "family": target["family"],
+                        "status": "failed",
+                        "response_time_seconds": elapsed,
+                        "answer": "",
+                        "error": response.text[:500],
+                    })
+                    continue
+
+                data = response.json()
+                choices = data.get("choices") or []
+                message = choices[0].get("message") if choices else {}
+                raw_answer = (message or {}).get("content") or ""
+                answer = _clean_korean_answer(raw_answer)
+                results.append({
+                    "model_id": model_id,
+                    "family": target["family"],
+                    "status": "success" if answer.strip() else "failed",
+                    "response_time_seconds": elapsed,
+                    "finish_reason": choices[0].get("finish_reason") if choices else None,
+                    "answer": answer.strip(),
+                    "error": "" if answer.strip() else "모델이 저장 가능한 한국어 답변을 생성하지 못했습니다.",
+                })
+            except Exception as error:
+                results.append({
+                    "model_id": model_id,
+                    "family": target["family"],
+                    "status": "failed",
+                    "response_time_seconds": round(time.perf_counter() - started, 3),
+                    "answer": "",
+                    "error": str(error),
+                })
+
+        for model_name in missing:
+            results.append({
+                "model_id": model_name,
+                "family": "요청 모델",
+                "status": "failed",
+                "response_time_seconds": 0,
+                "answer": "",
+                "error": "현재 Groq 계정의 지원 모델 목록에서 찾지 못했습니다.",
+            })
+
+        output_dir = Path(__file__).resolve().parent / "workspace" / "OpenLLM_Agent"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / _safe_report_filename(report_filename)
+
+        successful = [result for result in results if result["status"] == "success"]
+        fastest = min(successful, key=lambda item: item["response_time_seconds"]) if successful else None
+        longest = max(successful, key=lambda item: len(item["answer"])) if successful else None
+
+        lines = [
+            "# Open LLM 모델 실제 답변 비교 보고서",
+            "",
+            "## 1. 비교 질문",
+            "",
+            question,
+            "",
+            "## 2. 실행 요약",
+            "",
+            "| 기업/계열 | 모델 | 상태 | 응답 시간 | 답변 길이 | 종료 사유 |",
+            "|---|---|---:|---:|---:|---|",
+        ]
+        for result in results:
+            answer_length = len(result.get("answer") or "")
+            lines.append(
+                f"| {result['family']} | `{result['model_id']}` | {result['status']} | "
+                f"{result['response_time_seconds']}초 | {answer_length}자 | "
+                f"{result.get('finish_reason') or '-'} |"
+            )
+
+        lines.extend(["", "## 3. 모델별 실제 답변 원문", ""])
+        for index, result in enumerate(results, 1):
+            lines.extend([
+                f"### 3-{index}. `{result['model_id']}`",
+                "",
+                f"- 기업/계열: **{result['family']}**",
+                f"- 상태: **{result['status']}**",
+                f"- 응답 시간: **{result['response_time_seconds']}초**",
+                "",
+            ])
+            if result["status"] == "success":
+                lines.extend([result["answer"], ""])
+            else:
+                lines.extend([f"실패 원인: {result['error']}", ""])
+
+        lines.extend([
+            "## 4. 간단 평가",
+            "",
+            f"- 정상 응답 모델 수: **{len(successful)} / {len(results)}**",
+            f"- 가장 빠른 모델: **`{fastest['model_id'] if fastest else '없음'}`**",
+            f"- 가장 긴 답변 모델: **`{longest['model_id'] if longest else '없음'}`**",
+            "",
+            "> 이 보고서는 각 모델을 실제 Groq API로 호출한 결과를 저장한 것입니다. 답변의 사실 정확성은 별도 검증이 필요합니다.",
+            "",
+        ])
+
+        output_path.write_text("\n".join(lines), encoding="utf-8")
+
+        summary = {
+            "status": "success",
+            "report_path": str(output_path.resolve()),
+            "success_count": len(successful),
+            "failure_count": len(results) - len(successful),
+            "models": [
+                {
+                    "family": result["family"],
+                    "model_id": result["model_id"],
+                    "status": result["status"],
+                    "response_time_seconds": result["response_time_seconds"],
+                    "answer_length": len(result.get("answer") or ""),
+                    "error": result.get("error") or "",
+                }
+                for result in results
+            ],
+            "unsupported_requested_models": missing,
+        }
+        return json.dumps(summary, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"오류: {str(e)}"
+
+
+@tool(parse_docstring=True)
+def save_open_llm_report(request: str) -> str:
+    """현재 Groq 지원 모델 중 요청 조건에 맞는 모델들을 비교해 보고서를 저장합니다.
+
+    Args:
+        request: 질문과 선택 조건입니다. 예: 질문: ... 줄바꿈 선택: random:3 또는 models:qwen,gemma
+
+    Returns:
+        저장된 Markdown 보고서 경로와 모델별 실행 요약을 반환합니다.
+    """
+    question, selection = _parse_report_request(request)
+    return compare_open_llm_models_and_save_report.invoke({
+        "question": question,
+        "selection": selection,
+        "report_filename": "open_llm_battle_report.md",
+    })
+
+
+# ============================================
+# 도구 목록
+# ============================================
+
+TOOLS = [
+    read_file,
+    write_file,
+    edit_file,
+    search_workspace,
+    save_open_llm_report,
+]
