@@ -2,6 +2,7 @@
 
 Groq API를 통해 지원되는 여러 Open LLM 모델에 동일한 질문을 전달하고, 실제 답변의 품질과 응답 속도를 평가·비교하여 목적에 적합한 모델을 추천하는 LangGraph 기반 AI Agent.
 
+![LangGraph 실행 화면](Docs/LangGrapg.png)
 ---
 
 ## 주요 기능
@@ -76,4 +77,4 @@ GPT, Qwen, Groq 모델로 "RAG 문서 오염 공격을 방어하는 방법을 �
 
 ## 실행 결과
 
-
+![LangGraph 실행 화면](Docs/실행결과.png)
