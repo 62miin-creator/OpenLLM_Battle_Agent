@@ -78,39 +78,6 @@ def write_file(file_path: str, content: str) -> str:
 
 
 @tool(parse_docstring=True)
-def edit_file(file_path: str, old_string: str, new_string: str) -> str:
-    """파일에서 특정 문자열을 찾아 새로운 문자열로 교체합니다.
-
-    Args:
-        file_path: 수정할 파일의 경로
-        old_string: 찾을 문자열
-        new_string: 교체할 문자열
-
-    Returns:
-        성공 메시지 또는 오류 메시지
-    """
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        if old_string not in content:
-            return f"오류: 파일에서 지정된 문자열을 찾을 수 없습니다: {file_path}"
-
-        new_content = content.replace(old_string, new_string)
-
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(new_content)
-
-        return f"성공: 파일이 수정되었습니다: {file_path}"
-    except FileNotFoundError:
-        return f"오류: 파일을 찾을 수 없습니다: {file_path}"
-    except PermissionError:
-        return f"오류: 파일에 대한 수정 권한이 없습니다: {file_path}"
-    except Exception as e:
-        return f"오류: {str(e)}"
-
-
-@tool(parse_docstring=True)
 def delete_file(file_path: str) -> str:
     """파일을 삭제합니다.
 
@@ -239,69 +206,6 @@ def read_csv(file_path: str, max_rows: int = 50) -> str:
         return result
     except PermissionError:
         return f"오류: 파일에 대한 읽기 권한이 없습니다: {file_path}"
-    except Exception as e:
-        return f"오류: {str(e)}"
-
-
-# ============================================
-# 문서 검색 도구
-# ============================================
-
-@tool(parse_docstring=True)
-def search_workspace(query: str) -> str:
-    """workspace에서 파일명에 특정 키워드가 포함된 파일을 검색합니다.
-
-    Args:
-        query: 검색할 키워드
-
-    Returns:
-        검색 결과 목록
-    """
-    try:
-        cwd = os.getcwd()
-        results = []
-        extensions = [".md", ".txt", ".csv"]
-
-        for root, dirs, files in os.walk(cwd):
-            dirs[:] = [
-                directory
-                for directory in dirs
-                if not directory.startswith(".")
-                and directory
-                not in ["__pycache__", "node_modules", "venv", ".venv", ".cache"]
-            ]
-
-            level = root.replace(cwd, "").count(os.sep)
-            if level > 3:
-                continue
-
-            for file_name in files:
-                if file_name.startswith("."):
-                    continue
-
-                file_ext = os.path.splitext(file_name)[1].lower()
-                if (
-                    file_ext in extensions
-                    and query.lower() in file_name.lower()
-                ):
-                    file_path = os.path.join(root, file_name)
-                    rel_path = os.path.relpath(file_path, cwd)
-                    results.append(f"- {rel_path}")
-
-        if not results:
-            return (
-                f"검색 결과 없음: "
-                f"'{query}'에 해당하는 파일을 찾을 수 없습니다."
-            )
-
-        output = [
-            f"검색어: {query}",
-            f"총 {len(results)}개 파일 발견",
-            "",
-        ]
-        output.extend(results)
-
-        return "\n".join(output)
     except Exception as e:
         return f"오류: {str(e)}"
 
@@ -1082,8 +986,6 @@ def load_skill(skill_name: str) -> str:
 TOOLS = [
     read_file,
     write_file,
-    edit_file,
-    search_workspace,
     save_open_llm_report,
     load_skill,
 ]
