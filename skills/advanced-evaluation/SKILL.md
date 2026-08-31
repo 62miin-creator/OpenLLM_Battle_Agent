@@ -48,7 +48,7 @@ description: Evaluates multiple LLM responses to the same question using anonymo
 
 - `save_open_llm_report`: 여러 모델을 실제 호출하고 원문 보고서를 저장
 - `read_file`: 생성된 보고서와 모델별 원문 답변 확인
-- `write_file` 또는 `edit_file`: 평가 결과를 보고서에 반영
+- `write_file`: 평가 결과를 보고서에 반영
 - `web_search`: 사실 검증이 필요하고 도구가 제공되는 경우에만 선택적으로 사용
 
 필요한 도구가 제공되지 않으면 모델을 호출하거나 평가하거나 보고서를 저장했다고 주장하지 않는다.
